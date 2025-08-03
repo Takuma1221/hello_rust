@@ -1,0 +1,16 @@
+# Cargo関連
+/target/
+**/*.rs.bk
+
+# IDE関連
+.vscode/
+.idea/
+
+# OS関連
+.DS_Store
+Thumbs.db
+
+# その他
+*.log
+*.tmp
+*.bak
