@@ -3,7 +3,7 @@ use std::io;
 
 
 
-fn print_histroy(words: String, history: &mut Vec<String>, result) {
+fn print_histroy(words: String, history: &mut Vec<String>, mut result) {
     println!("{}です！", words);
     result += 1;
     history.push(words.to_string());
