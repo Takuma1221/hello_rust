@@ -1,20 +1,24 @@
 //! Stage1 Step1-2: 最初のリクエストと tool_calls が付いたかどうかを見るところまで。
 //! ここではまだ calc_sum を実際に動かしたり 2 回目のリクエスト送信はしません。
 
-use dotenv::dotenv;                 // .env から OPENAI_API_KEY を読む
+use dotenv::dotenv; // .env から OPENAI_API_KEY を読む
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE}; // 認証用の定数
 use serde::{Deserialize, Serialize}; // 型 <-> JSON 変換 (derive)
-use serde_json::{Value, json};       // json! マクロや動的値
-use std::env;                        // 環境変数参照
-use std::io;                         // 標準入力読み込み
+use serde_json::{Value, json}; // json! マクロや動的値
+use std::env; // 環境変数参照
+use std::io; // 標準入力読み込み
 
 // ===== モデルから「受け取る」形 =====
 // リクエストで送った形とは微妙に構造が違うため分離しています。
 #[derive(Debug, Deserialize)]
-struct ChatResponse { choices: Vec<Choice> }
+struct ChatResponse {
+    choices: Vec<Choice>,
+}
 
 #[derive(Debug, Deserialize)]
-struct Choice { message: IncomingMessage }
+struct Choice {
+    message: IncomingMessage,
+}
 
 #[derive(Debug, Deserialize)]
 struct IncomingMessage {
@@ -41,20 +45,36 @@ struct CalledFunction {
 
 // ===== モデルへ「送る」形 =====
 #[derive(Debug, Serialize)]
-struct OutgoingMessage<'a> { role: &'a str, content: &'a str }
+struct OutgoingMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
 
 #[derive(Debug, Serialize)]
-struct ToolDefinition<'a> { #[serde(rename = "type")] r#type: &'a str, function: ToolFunctionDefinition<'a> }
+struct ToolDefinition<'a> {
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    function: ToolFunctionDefinition<'a>,
+}
 
 #[derive(Debug, Serialize)]
-struct ToolFunctionDefinition<'a> { name: &'a str, description: &'a str, parameters: JsonSchemaObject<'a> }
+struct ToolFunctionDefinition<'a> {
+    name: &'a str,
+    description: &'a str,
+    parameters: JsonSchemaObject<'a>,
+}
 
 #[derive(Debug, Serialize)]
-struct JsonSchemaObject<'a> { #[serde(rename = "type")] r#type: &'a str, properties: Value, required: Vec<&'a str> }
+struct JsonSchemaObject<'a> {
+    #[serde(rename = "type")]
+    r#type: &'a str,
+    properties: Value,
+    required: Vec<&'a str>,
+}
 
 #[tokio::main]
 pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
-    dotenv().ok();                      // .env が無くてもエラーにはしない
+    dotenv().ok(); // .env が無くてもエラーにはしない
     let api_key = env::var("OPENAI_API_KEY")?; // 未設定ならここで終了
 
     println!("足し算したい内容を自然文で入力してください (例: 3と8を足して)");

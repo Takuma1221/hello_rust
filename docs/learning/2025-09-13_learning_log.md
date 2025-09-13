@@ -52,7 +52,7 @@ let back: User = serde_json::from_str(&json_text)?;
 ### OpenAI Function Calling: schema とは
 
 - 関数の引数仕様を JSON Schema 形式で渡す仕組み。
-- モデルは `tool_calls` に `function.name` と `arguments`(JSON文字列) を載せる。
+- モデルは `tool_calls` に `function.name` と `arguments`(JSON 文字列) を載せる。
 - 例 (calc_sum): properties / required で型と必須を伝える。
 
 ### tool_calls 判定 (Stage1 ステップ 2 まで)
@@ -152,7 +152,7 @@ impl std::fmt::Display for User { // トレイト実装
 
 - Rust の安全性 = 「所有者は 1 つ」+「参照ルール」で確保。
 - move: `let b = a;` で `a` は以後使えない (Copy 型除く)。
-- `&T` は複数OK / `&mut T` は 1 つだけ。
+- `&T` は複数 OK / `&mut T` は 1 つだけ。
 - 不変と可変は同時不可。
 - 参照は元データより長生きできない。
 
