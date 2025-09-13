@@ -1,18 +1,18 @@
 # 学習ログ (開始日: 2025-09-13)
 
-このファイルはセッション中に得た知識を逐次追記していくログです。日付ごとに節を追加し、用語 → 要約 → サンプル → チェックポイントの順で整理します。
+このファイルは学んだ内容を順番に積み上げるログです。日付ごとに節を作り、用語 → 要約 → サンプル → チェックポイントの流れを意識します。
 
 ## 2025-09-13
 
 ### Option / Some / None
 
-- `Option<T>` は値が「ある/ない」を表す列挙型: `Some(T)` or `None`。
-- 典型パターン: `if let Some(v) = opt { ... }` / `match` で網羅。
+- `Option<T>` は「値がある/ない」を表す列挙型: `Some(T)` or `None`。
+- よく見る形: `if let Some(v) = opt { ... }` / `match` で網羅。
 - よく使うメソッド: `map`, `and_then`, `unwrap_or`, `ok_or`。
 
 ### if let パターン
 
-- `match` の簡略記法。指定パターンにマッチした場合のみブロック実行。
+- `match` の短縮。欲しい形だけ取り出して残りは捨てたい時に楽。
 
 ```rust
 if let Some(first) = vec.first() {
@@ -24,8 +24,8 @@ if let Some(first) = vec.first() {
 
 ### serde の `#[serde(rename = "...")]`
 
-- フィールド名と JSON のキー名が違うときに対応付ける。
-- フィールド名が同じなら不要。
+- フィールド名と JSON のキー名が違うときに合わせる。
+- 同じなら不要。
 
 ```rust
 #[derive(Serialize, Deserialize)]
@@ -37,9 +37,9 @@ struct Message {
 
 ### シリアライズ / デシリアライズ
 
-- シリアライズ: Rust 値 -> JSON 文字列など。
-- デシリアライズ: JSON 文字列 -> Rust 型。
-- 目的: ネットワーク/API/保存媒体とやり取り可能にする。
+- シリアライズ: Rust 値 -> JSON。
+- デシリアライズ: JSON -> Rust 型。
+- 目的: API や保存でやり取り可能にする。
 
 ```rust
 #[derive(Serialize, Deserialize)]
@@ -51,13 +51,13 @@ let back: User = serde_json::from_str(&json_text)?;
 
 ### OpenAI Function Calling: schema とは
 
-- 関数の引数仕様を JSON Schema 形式で宣言したものを API に渡す。
-- モデルは tool_calls で `function.name` と `arguments`(JSON 文字列) を返す。
-- 例 (calc_sum): properties / required で型と必須性を伝える。
+- 関数の引数仕様を JSON Schema 形式で渡す仕組み。
+- モデルは `tool_calls` に `function.name` と `arguments`(JSON文字列) を載せる。
+- 例 (calc_sum): properties / required で型と必須を伝える。
 
 ### tool_calls 判定 (Stage1 ステップ 2 まで)
 
-- レスポンス構造体に `tool_calls: Vec<ToolCall>` を追加し、空/非空で分岐。
+- `tool_calls: Vec<ToolCall>` を見て空/非空で分岐。
 
 ```rust
 if !msg.tool_calls.is_empty() { /* tool call */ } else { /* 通常回答 */ }
@@ -67,13 +67,13 @@ if !msg.tool_calls.is_empty() { /* tool call */ } else { /* 通常回答 */ }
 
 ### cargo build --quiet
 
-- ビルド出力(進行ログ)を抑制し、警告/エラーのみ表示。
-- CI やスクリプトでログをコンパクトにしたいときに有効。
+- 進行ログを抑えて警告/エラーだけ見たい時に便利。
+- CI や自動スクリプトで出力を短く保つ。
 
 ### serde default 属性
 
-- 欠けたフィールドを `Default` 実装値で自動補填しエラーにしない。
-- 後方互換性確保 / 一部設定省略を許可するときに有効。
+- 欠けたフィールドを `Default` で埋めてエラーを避けるテクニック。
+- 後方互換や設定省略を許したいとき有効。
 
 ```rust
 #[derive(serde::Deserialize, Default)]
@@ -82,13 +82,13 @@ struct Limits { max_conn: u32, timeout_ms: u64 }
 struct Cfg { #[serde(default)] limits: Limits }
 ```
 
-- `Option<T>` は存在有無、`default` は具体値補填で役割が異なる。
+- `Option<T>` = あるかどうか / `default` = 値を補う。
 
 ### 配列の表現
 
-- 固定長: `[T; N]` (例: `[u8;3]` RGB)
-- 可変長: `Vec<T>` (最頻)
-- 参照スライス: `&[T]` (借用・所有権不要)
+- 固定長: `[T; N]` (例: RGB `[u8;3]`)
+- 可変長: `Vec<T>`
+- 借用読み取りのみ: `&[T]`
 
 ```rust
 struct Color { rgb: [u8; 3] }
@@ -100,8 +100,8 @@ fn sum(slice: &[i32]) -> i32 { slice.iter().sum() }
 
 - 形固定: `struct`
 - キー可変: `HashMap<String, T>`
-- 型未確定/混在: `serde_json::Value`
-- 追加プロパティ吸収: `#[serde(flatten)]` + `HashMap`
+- 型いろいろ: `serde_json::Value`
+- 余剰キー吸収: `flatten + HashMap`
 
 ```rust
 #[derive(serde::Deserialize)]
@@ -112,9 +112,9 @@ struct Users { map: std::collections::HashMap<String, User> }
 
 ### impl ブロック
 
-- 型にメソッド/関連関数やトレイト実装を与えるための構文。
-- 自動生成されないので `new()` など欲しい API は自分で書く。
-- 複数 impl に分割可 (役割ごと整理)。
+- 型にメソッド/関連関数/トレイト実装を追加する枠。
+- `new()` など欲しい便利関数は自作。
+- 分割して整理して良い。
 
 ```rust
 struct User { id: u32, name: String }
@@ -133,8 +133,7 @@ impl std::fmt::Display for User { // トレイト実装
 }
 ```
 
-- `impl Trait` 構文(戻り値位置など)とは別概念。
-- `derive` で生成される実装(例: Debug, Default)とも区別。
+- `impl Trait` や derive とは役割が違う。
 
 ### チェックポイント状況
 
@@ -145,17 +144,17 @@ impl std::fmt::Display for User { // トレイト実装
 
 ---
 
-追記ルールは `prompts/update_docs_instruction.md` を参照。Stage1 の詳細は `docs/function_calling/stage1.md`。Q&A 一覧は `docs/learning/qna_log.md`。 (Q&A へ serde default / 配列 / オブジェクト 表現を追加済)
+参照: `prompts/update_docs_instruction.md` / `docs/function_calling/stage1.md` / `docs/learning/qna_log.md`
 
-**運用変更メモ (2025-09-13 後半)**: Q&A ログ方針を「再参照しそうなもののみ」→「挨拶/軽微確認以外の全質問を必ず記録」に更新。スキップ時は理由コメントを本ログに残す。
+【運用変更 (2025-09-13)】Q&A は挨拶/軽微確認以外は全部記録。省いたら理由をここにメモ。
 
 ### 所有 (ownership) / 借用 (borrowing)
 
-- Rust のメモリ安全性は「唯一の所有者 + 参照の整合性」ルールで保証。
-- 所有移動(move): `let b = a;` で `a` がムーブし以後 `a` 使用不可 (Copy 型除く)。
-- 借用参照: `&T` は読み取り専用を複数同時可、`&mut T` は排他的 1 つのみ。
-- 不変参照と可変参照は同一ライフタイムで共存不可 (データ競合防止)。
-- 参照は所有者より長く生きられない (ライフタイム規則で静的検査)。
+- Rust の安全性 = 「所有者は 1 つ」+「参照ルール」で確保。
+- move: `let b = a;` で `a` は以後使えない (Copy 型除く)。
+- `&T` は複数OK / `&mut T` は 1 つだけ。
+- 不変と可変は同時不可。
+- 参照は元データより長生きできない。
 
 ```rust
 let mut s = String::from("abc");
@@ -167,17 +166,16 @@ let m = &mut s;     // ここなら可変参照取得可
 m.push('x');
 ```
 
-- 関数へ所有を渡すか借用で済ませるかは「その関数が値を保持する必要があるか」で判断。
-- `clone()` は所有移動を避けたいが同じヒープ内容を複製したい場合にのみ使用 (コスト意識)。
+- 所有渡し vs 借用 = 関数が長期保持するかどうか。
+- `clone()` は本当に複製したい時だけ (コスト注意)。
 
 Q&A 追記メモ: 詳細な Q&A を `qna_log.md` に追加 (所有/借用)。
 
 ### ライフタイム付き参照 `&'a str`
 
-- `&str` は UTF-8 文字列スライス参照、`'a` はその参照が有効な期間ラベル。
-- 複数の参照引数と戻り値の寿命関係を明示するための“期間ジェネリクス”。
-- 省略規則(elision)で単純ケース(引数 1 つなど)は明示不要。
-- `&'static str` はプログラム全期間有効 (文字列リテラル)。
+- `&str` は文字列スライス参照。`'a` はその参照たちの生存グループ名。
+- 複数参照と戻り値の関係を示す印。
+- 単純な形は省略可。`&'static str` は全期間有効 (リテラル)。
 
 ```rust
 fn pick<'a>(a: &'a str, b: &'a str) -> &'a str { if a.len() >= b.len() { a } else { b } }

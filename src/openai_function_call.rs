@@ -1,31 +1,28 @@
-//! Stage1 Step1-2: 最初のリクエスト + tool_calls 有無判定のみ
-//! ここでは calc_sum の実行や 2 回目 API 呼び出しは行わない。
+//! Stage1 Step1-2: 最初のリクエストと tool_calls が付いたかどうかを見るところまで。
+//! ここではまだ calc_sum を実際に動かしたり 2 回目のリクエスト送信はしません。
 
-use dotenv::dotenv;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::env;
-use std::io;
+use dotenv::dotenv;                 // .env から OPENAI_API_KEY を読む
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE}; // 認証用の定数
+use serde::{Deserialize, Serialize}; // 型 <-> JSON 変換 (derive)
+use serde_json::{Value, json};       // json! マクロや動的値
+use std::env;                        // 環境変数参照
+use std::io;                         // 標準入力読み込み
 
-// ===== レスポンス用 (tool_calls 判定) =====
+// ===== モデルから「受け取る」形 =====
+// リクエストで送った形とは微妙に構造が違うため分離しています。
 #[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-}
+struct ChatResponse { choices: Vec<Choice> }
 
 #[derive(Debug, Deserialize)]
-struct Choice {
-    message: IncomingMessage,
-}
+struct Choice { message: IncomingMessage }
 
 #[derive(Debug, Deserialize)]
 struct IncomingMessage {
     role: String,
     #[serde(default)]
-    content: Option<String>,
+    content: Option<String>, // 関数呼び出しが付く場合は空になることがある
     #[serde(default)]
-    tool_calls: Vec<ToolCall>,
+    tool_calls: Vec<ToolCall>, // 無ければ空の配列
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,51 +35,35 @@ struct ToolCall {
 
 #[derive(Debug, Deserialize)]
 struct CalledFunction {
-    name: String,
-    // OpenAI は arguments を文字列(JSON)で返す
-    arguments: String,
+    name: String,      // 呼び出してほしい関数名
+    arguments: String, // JSON 文字列 (Step3 で構造体に読み込む予定)
 }
 
-// ===== リクエスト用 (送信する tools と messages) =====
+// ===== モデルへ「送る」形 =====
 #[derive(Debug, Serialize)]
-struct OutgoingMessage<'a> {
-    role: &'a str,
-    content: &'a str,
-}
+struct OutgoingMessage<'a> { role: &'a str, content: &'a str }
 
 #[derive(Debug, Serialize)]
-struct ToolDefinition<'a> {
-    #[serde(rename = "type")]
-    r#type: &'a str, // "function"
-    function: ToolFunctionDefinition<'a>,
-}
+struct ToolDefinition<'a> { #[serde(rename = "type")] r#type: &'a str, function: ToolFunctionDefinition<'a> }
 
 #[derive(Debug, Serialize)]
-struct ToolFunctionDefinition<'a> {
-    name: &'a str,
-    description: &'a str,
-    parameters: JsonSchemaObject<'a>,
-}
+struct ToolFunctionDefinition<'a> { name: &'a str, description: &'a str, parameters: JsonSchemaObject<'a> }
 
 #[derive(Debug, Serialize)]
-struct JsonSchemaObject<'a> {
-    #[serde(rename = "type")]
-    r#type: &'a str, // "object"
-    properties: Value,
-    required: Vec<&'a str>,
-}
+struct JsonSchemaObject<'a> { #[serde(rename = "type")] r#type: &'a str, properties: Value, required: Vec<&'a str> }
 
 #[tokio::main]
 pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
-    dotenv().ok();
-    let api_key = env::var("OPENAI_API_KEY")?;
+    dotenv().ok();                      // .env が無くてもエラーにはしない
+    let api_key = env::var("OPENAI_API_KEY")?; // 未設定ならここで終了
 
     println!("足し算したい内容を自然文で入力してください (例: 3と8を足して)");
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
     let user_text = input.trim();
 
-    // ツール定義 (型で組み立て → Serialize)
+    // ===== ツール定義 =====
+    // json! を都度ベタ書きするより、型でまとめると再利用や拡張がしやすい
     let tool_schema = ToolDefinition {
         r#type: "function",
         function: ToolFunctionDefinition {
@@ -99,7 +80,7 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
-    // 送信メッセージ (こちらは content 必須)
+    // ===== 送信メッセージ (system + user) =====
     let messages = vec![
         OutgoingMessage {
             role: "system",
@@ -111,23 +92,8 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
 
-    // let tool_schema = json!({
-    //     "type": "function",
-    //     "function": {
-    //         "name": "calc_sum",
-    //         "description": "2つの数 a と b の合計を計算して返す",
-    //         "parameters": {
-    //             "type": "object",
-    //             "properties": {
-    //                 "a": {"type": "number", "description": "最初の数"},
-    //                 "b": {"type": "number", "description": "次の数"}
-    //             },
-    //             "required": ["a", "b"]
-    //         }
-    //     }
-    // });
-
     let client = reqwest::Client::new();
+    // ===== 1 回目の呼び出し =====
     let first = client
         .post("https://api.openai.com/v1/chat/completions")
         .header(AUTHORIZATION, format!("Bearer {}", api_key))
@@ -140,13 +106,14 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
         .send()
         .await?;
 
-    let status = first.status();
+    let status = first.status(); // body 消費前に保持
     let body_text = first.text().await?;
     if !status.is_success() {
         eprintln!("API Error: {}\n{}", status, body_text);
         return Ok(());
     }
 
+    // JSON 文字列 -> 型 (tool_calls が付いたか見るため)
     let parsed: ChatResponse = match serde_json::from_str(&body_text) {
         Ok(v) => v,
         Err(e) => {
@@ -155,6 +122,7 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // ===== 最初の候補を確認 (1件想定) =====
     if let Some(first_choice) = parsed.choices.first() {
         let msg = &first_choice.message;
         if !msg.tool_calls.is_empty() {
@@ -163,7 +131,7 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
                 "tool_calls 検出: {} (arguments raw JSON string)",
                 tc.function.name
             );
-            println!("← ここまでが Stage1 ステップ2。次は引数 JSON をパースして実行します。");
+            println!("← Step2 完了。次は arguments (JSON 文字列) を構造体へ読み込み計算します。");
         } else {
             println!("通常回答: {}", msg.content.clone().unwrap_or_default());
         }
