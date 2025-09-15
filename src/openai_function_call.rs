@@ -5,6 +5,7 @@ use dotenv::dotenv; // .env から OPENAI_API_KEY を読む
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE}; // 認証用の定数
 use serde::{Deserialize, Serialize}; // 型 <-> JSON 変換 (derive)
 use serde_json::{Value, json}; // json! マクロや動的値
+use std::collections::HashMap; // 関数名→実行関数のレジストリ用
 use std::env; // 環境変数参照
 use std::io; // 標準入力読み込み
 
@@ -72,6 +73,148 @@ struct JsonSchemaObject<'a> {
     required: Vec<&'a str>,
 }
 
+#[derive(serde::Deserialize)]
+struct SumArgs {
+    a: f64,
+    b: f64,
+}
+
+// ツール呼び出し結果の意味を Option ではなく列挙型で表現。
+enum ToolCallOutcome {
+    NoToolCall, // tool_calls が無かった
+    Executed {
+        tool_name: String,
+        result_number: f64, // 今回は数値のみ (Stage1 想定)
+    },
+}
+
+// 失敗理由 (簡易)。必要に応じて発展させる (ParseError など細分化)。
+#[derive(Debug)]
+enum ToolCallError {
+    EmptyChoices,
+    UnknownTool(String),
+    ArgParse(String),
+}
+
+impl std::fmt::Display for ToolCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ToolCallError::EmptyChoices => write!(f, "choices が空"),
+            ToolCallError::UnknownTool(n) => write!(f, "未知のツール: {n}"),
+            ToolCallError::ArgParse(e) => write!(f, "引数パース失敗: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ToolCallError {}
+
+// Chat API 呼び出し用の汎用エラー (簡易版)
+#[derive(Debug)]
+enum OpenAiCallError {
+    Http(String),
+    JsonBuild(String),
+    JsonParse(String),
+}
+
+impl std::fmt::Display for OpenAiCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenAiCallError::Http(e) => write!(f, "HTTPエラー: {e}"),
+            OpenAiCallError::JsonBuild(e) => write!(f, "JSON生成失敗: {e}"),
+            OpenAiCallError::JsonParse(e) => write!(f, "JSONパース失敗: {e}"),
+        }
+    }
+}
+impl std::error::Error for OpenAiCallError {}
+
+// 送信用メッセージ型 (今は OutgoingMessage を再利用)
+
+// リクエスト JSON を組み立てる (tools は引数 Vec で柔軟性を残す)
+fn build_request_json<'a>(
+    model: &str,
+    messages: &[OutgoingMessage<'a>],
+    tools: &[ToolDefinition<'a>],
+) -> serde_json::Value {
+    json!({
+        "model": model,
+        "messages": messages,
+        "tools": tools
+    })
+}
+
+// 実際に送信し文字列ボディを返す
+async fn send_chat_completion(
+    client: &reqwest::Client,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> Result<String, OpenAiCallError> {
+    let resp = client
+        .post("https://api.openai.com/v1/chat/completions")
+        .header(AUTHORIZATION, format!("Bearer {}", api_key))
+        .header(CONTENT_TYPE, "application/json")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| OpenAiCallError::Http(e.to_string()))?;
+    let status = resp.status();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| OpenAiCallError::Http(e.to_string()))?;
+    if !status.is_success() {
+        return Err(OpenAiCallError::Http(format!(
+            "status={} body={}",
+            status, text
+        )));
+    }
+    Ok(text)
+}
+
+// (今後 Step4 で複数ツールを扱うなら enum やマップ化を検討するが、Stage1 は 1 個に固定)
+
+pub fn calc_sum(a: f64, b: f64) -> f64 {
+    return a + b;
+}
+
+pub fn calc_times(a: f64, b: f64) -> f64 {
+    return a * b;
+}
+
+// ChatResponse から最初の tool_call (calc_sum) を拾って実行する小さなヘルパ。
+// 見つからなければ Ok(None)。失敗理由は Err(String) で簡易返却。
+// 関数名→ (a,b)->f64 のシンプルな関数ポインタを登録しておき、選択された関数を実行。
+// 戻り値: Ok(Some(result)) 実行成功 / Ok(None) tool_call 無し / Err(...) エラー。
+
+// OKの型(None, Some)ではなく、専用の型で返す
+// AIにsendする別関数を作る　引数：プロンプト、関数一覧、会話履歴（Toolの結果を含めて）
+fn execute_first_tool_call(
+    parsed: &ChatResponse,
+    registry: &HashMap<String, fn(f64, f64) -> f64>,
+) -> Result<ToolCallOutcome, ToolCallError> {
+    let first_choice = parsed.choices.first().ok_or(ToolCallError::EmptyChoices)?;
+    let msg = &first_choice.message;
+    if msg.tool_calls.is_empty() {
+        return Ok(ToolCallOutcome::NoToolCall);
+    }
+    let tc = &msg.tool_calls[0];
+    println!(
+        "tool_calls 検出: {} (arguments raw JSON string)",
+        tc.function.name
+    );
+    let func_name = &tc.function.name;
+    let func = registry
+        .get(func_name)
+        .ok_or_else(|| ToolCallError::UnknownTool(func_name.clone()))?;
+    let raw = &tc.function.arguments;
+    let args: SumArgs = serde_json::from_str(raw)
+        .map_err(|e| ToolCallError::ArgParse(format!("{e}; raw: {raw}")))?;
+    let result = func(args.a, args.b);
+    Ok(ToolCallOutcome::Executed {
+        tool_name: func_name.clone(),
+        result_number: result,
+    })
+}
+
 #[tokio::main]
 pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok(); // .env が無くてもエラーにはしない
@@ -100,6 +243,11 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
+    // ===== レジストリ (増えたらここに追加) =====
+    let mut registry: HashMap<String, fn(f64, f64) -> f64> = HashMap::new();
+    registry.insert("calc_sum".into(), calc_sum as fn(f64, f64) -> f64);
+    registry.insert("calc_times".into(), calc_times as fn(f64, f64) -> f64); // まだ schema 未公開
+
     // ===== 送信メッセージ (system + user) =====
     let messages = vec![
         OutgoingMessage {
@@ -113,25 +261,15 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     let client = reqwest::Client::new();
-    // ===== 1 回目の呼び出し =====
-    let first = client
-        .post("https://api.openai.com/v1/chat/completions")
-        .header(AUTHORIZATION, format!("Bearer {}", api_key))
-        .header(CONTENT_TYPE, "application/json")
-        .json(&json!({
-            "model": "gpt-4o-mini",
-            "messages": messages,
-            "tools": [tool_schema]
-        }))
-        .send()
-        .await?;
-
-    let status = first.status(); // body 消費前に保持
-    let body_text = first.text().await?;
-    if !status.is_success() {
-        eprintln!("API Error: {}\n{}", status, body_text);
-        return Ok(());
-    }
+    // ===== 1 回目の呼び出し (組み立て → 送信) =====
+    let request_json = build_request_json("gpt-4o-mini", &messages, &[tool_schema]);
+    let body_text = match send_chat_completion(&client, &api_key, &request_json).await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("API 呼び出し失敗: {e}");
+            return Ok(());
+        }
+    };
 
     // JSON 文字列 -> 型 (tool_calls が付いたか見るため)
     let parsed: ChatResponse = match serde_json::from_str(&body_text) {
@@ -142,21 +280,23 @@ pub async fn play() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // ===== 最初の候補を確認 (1件想定) =====
-    if let Some(first_choice) = parsed.choices.first() {
-        let msg = &first_choice.message;
-        if !msg.tool_calls.is_empty() {
-            let tc = &msg.tool_calls[0];
-            println!(
-                "tool_calls 検出: {} (arguments raw JSON string)",
-                tc.function.name
-            );
-            println!("← Step2 完了。次は arguments (JSON 文字列) を構造体へ読み込み計算します。");
-        } else {
-            println!("通常回答: {}", msg.content.clone().unwrap_or_default());
+    // ===== 最初の候補を簡潔に処理 =====
+    match execute_first_tool_call(&parsed, &registry) {
+        Ok(ToolCallOutcome::Executed {
+            tool_name,
+            result_number,
+        }) => {
+            println!("ツール {tool_name} 実行結果: {result_number}");
         }
-    } else {
-        println!("choices が空です");
+        Ok(ToolCallOutcome::NoToolCall) => {
+            if let Some(first) = parsed.choices.first() {
+                println!(
+                    "通常回答: {}",
+                    first.message.content.clone().unwrap_or_default()
+                );
+            }
+        }
+        Err(err) => eprintln!("tool 処理エラー: {err}"),
     }
 
     Ok(())

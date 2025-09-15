@@ -87,6 +87,85 @@
 7. 2 回目用メッセージ: (a) 1 回目 assistant メッセージ (tool_calls 付き) (b) 実行結果の tool メッセージ
 8. 2 回目呼び出し → 最終回答の content を表示
 
+### 2 回目呼び出し用 messages の詳しい構成
+
+2 回目では「1 回目でモデルが 'こういうツールを実行して' と指示した履歴」と「こちらが実際にその結果を返した履歴」を両方含めて再送します。モデルは履歴を見て最終文章回答を組み立てます。
+
+並び順 (例):
+
+1. system (最初と同じ方針メッセージ)
+2. user (元の質問)
+3. assistant (tool_calls を含むメッセージそのまま)
+4. tool (実行結果を返すメッセージ)
+
+各メッセージの形:
+
+```jsonc
+// (3) assistant tool_calls メッセージ例
+{
+  "role": "assistant",
+  "tool_calls": [
+    {
+      "id": "call_abc123",
+      "type": "function",
+      "function": {
+        "name": "calc_sum",
+        "arguments": "{\"a\":3,\"b\":8}"
+      }
+    }
+  ]
+}
+
+// (4) tool 実行結果メッセージ例
+{
+  "role": "tool",
+  "tool_call_id": "call_abc123",
+  "content": "11"
+}
+```
+
+ポイント:
+
+- assistant メッセージは改変せずそのまま再送 (順番・ID を壊さない)。
+- tool メッセージでは `tool_call_id` に元の `tool_calls[i].id` を必ず入れる (対応付け)。
+- `content` は関数の返り値を文字列化したもの (数値なら `to_string()`)。
+- 複数 tool_calls が返るケースでは (4) の tool メッセージを tool_calls の数だけ追加する。
+
+Rust での組み立て抜粋:
+
+```rust
+let second_messages = vec![
+    json!({"role":"system","content":"あなたは計算を手伝うアシスタントです"}),
+    json!({"role":"user","content": user_input}),
+    json!({
+        "role":"assistant",
+        "tool_calls": first_msg.tool_calls.iter().map(|t| json!({
+            "id": t.id,
+            "type": "function",
+            "function": {"name": t.function.name, "arguments": t.function.arguments}
+        })).collect::<Vec<_>>()
+    }),
+    json!({
+        "role":"tool",
+        "tool_call_id": tc.id,
+        "content": result_value.to_string()
+    })
+];
+```
+
+ありがちなミス:
+
+- tool メッセージに `role: "assistant"` を付けてしまう → モデルが結果を認識できない。
+- `tool_call_id` の値を間違える / 省略する → 紐付けされず無視される。
+- assistant メッセージを再構築時に `tool_calls` の `arguments` を勝手に整形し直す → 差分として扱われ想定外挙動の可能性。
+
+検証手順 (最小):
+
+1. 1 回目レスポンスを保存 (raw JSON)。
+2. 生成した second_messages を `serde_json::to_string_pretty` で一度表示。
+3. `tool_call_id` が 1 回目の `tool_calls[].id` と一致するか確認。
+4. 2 回目レスポンスで `content` に最終説明文が入ることを目視確認。
+
 ## Rust サンプル (`src/openai_function_call.rs` 抜粋)
 
 主要な流れに集中するためエラー処理は最小に絞っています。細かな改善 (再試行や分類) は後の段階で検討します。
