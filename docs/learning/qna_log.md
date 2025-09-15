@@ -4,6 +4,69 @@
 
 ---
 
+### 質問: Function Calling の arguments を型にパースする理由
+
+日付: 2025-09-15
+カテゴリ: [OpenAI] [Serde]
+Q: `function.arguments` をそのまま文字列で扱わず `SumArgs` にする目的は？
+A: モデルは JSON 文字列を返すだけなので、型へデシリアライズして型安全・欠落/型不一致検出・拡張容易性を得る。手動で `split` 等するよりバグと分岐を減らせる。余計なキーは無視される (厳密化したいなら `#[serde(deny_unknown_fields)]`)。
+コード例:
+
+```rust
+#[derive(serde::Deserialize)]
+struct SumArgs { a: f64, b: f64 }
+let raw = &tc.function.arguments;
+let args: SumArgs = serde_json::from_str(raw)?;
+let result = calc_sum(args.a, args.b);
+```
+
+関連用語: serde_json, from_str, deny_unknown_fields
+再発防止メモ: 文字列のまま index せず構造体に寄せる癖を付ける。
+
+---
+
+### 質問: 一度 `let raw = &tc.function.arguments;` に置く利点
+
+日付: 2025-09-15
+カテゴリ: [Rust]
+Q: 直接 `from_str(&tc.function.arguments)` と書かない理由は？
+A: (1) 繰り返し書かずに可読性向上 (2) ログで `{raw}` を再利用 (3) 将来前処理追加余地 (trim/長さ制限) (4) 借用を一箇所に集中 (5) 意図「これが生の JSON」を名前で明示。
+コード例:
+
+```rust
+let raw = &tc.function.arguments; // 生 JSON 文字列
+if raw.len() > 200 { /* 省略表示など拡張しやすい */ }
+let args: SumArgs = serde_json::from_str(raw)?;
+```
+
+関連用語: borrow, readability, refactoring point
+再発防止メモ: 同じ式を 2 回以上使うなら一度束縛する選択肢を検討。
+
+---
+
+### 質問: match で Result を展開する書き方の意図
+
+日付: 2025-09-15
+カテゴリ: [Rust]
+Q: `match serde_json::from_str(raw) { Ok(v) => v, Err(e) => { ... return Ok(()); } }` の狙い？
+A: ログ出力とカスタム早期終了を挟みたいので `?` ではなく `match`。成功分岐は `SumArgs` を返し失敗はメッセージ表示後に関数終了。`if let` でも書けるが失敗側で早期 return を書く形になり、`match` の方が Ok/Err が並び分かりやすい。
+コード例:
+
+```rust
+let args: SumArgs = match serde_json::from_str(raw) {
+  Ok(v) => v,
+  Err(e) => {
+    eprintln!("引数パース失敗: {e} raw:{raw}");
+    return Ok(()); // ここで静かに終了
+  }
+};
+```
+
+関連用語: Result, ?演算子, early return
+再発防止メモ: ログ + 続行制御が必要なら `match` / `if let`、素通しで良ければ `?`。
+
+---
+
 ### 質問: `&'a str` の `'a` は何？
 
 日付: 2025-09-13
