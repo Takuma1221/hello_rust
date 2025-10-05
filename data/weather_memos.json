@@ -1,0 +1,18 @@
+{
+  "memos": [
+    {
+      "timestamp": "2025-10-05 11:47:15",
+      "city": "Tokyo",
+      "weather": "雲",
+      "temperature": 26.0,
+      "note": "散歩日和"
+    },
+    {
+      "timestamp": "2025-10-05 11:46:55",
+      "city": "大阪",
+      "weather": "小雨",
+      "temperature": 27.0,
+      "note": "明日の出張準備"
+    }
+  ]
+}

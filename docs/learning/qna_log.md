@@ -341,3 +341,154 @@ fn main() {
 再発防止メモ: エラー `borrow of moved value` が出たら「所有権どこで move されたか」を探す思考ルーチンを徹底。
 
 ---
+
+### 質問: 参照（`&`）と所有権の違い
+
+日付: 2025-10-05
+カテゴリ: [Rust]
+Q: 型に `&` がつくのはなぜ？`&MemoList` のような書き方の意味は？
+A: `&` は参照（reference）= 値を借りるだけで所有権は移動しない。関数に値を渡すとデフォルトでは所有権が移動（move）して元の場所では使えなくなるが、参照なら呼び出し後も使える。`&T` は読み取り専用、`&mut T` は変更可能な借用。
+コード例:
+
+```rust
+// 所有権が移動（元で使えなくなる）
+fn consume(list: MemoList) { }
+
+// 参照で借りる（元で使える）
+fn save_memos(list: &MemoList) { }
+
+let my_list = MemoList::new();
+save_memos(&my_list);  // 参照を渡す
+// ここでも my_list は使える！
+```
+
+関連用語: borrow, ownership, mutable, immutable, reference
+再発防止メモ: 読み取り専用なら `&T`、変更するなら `&mut T`、所有権を渡すなら `T`
+
+---
+
+### 質問: let, let mut, const の違い
+
+日付: 2025-10-05
+カテゴリ: [Rust]
+Q: `let mut` と `let` と `const` の使い分けは？
+A: `let` は不変変数（再代入不可）、`let mut` は可変変数（再代入可能）、`const` はコンパイル時定数（型注釈必須、実行時計算不可、グローバルスコープ可）。Rust はデフォルト不変で安全性優先。
+コード例:
+
+```rust
+let x = 5;           // 不変
+let mut y = 10;      // 可変
+const MAX: u32 = 100; // 定数（型注釈必須）
+
+y += 1;  // OK
+x += 1;  // エラー！
+
+// シャドーイング（let で型変更可能）
+let spaces = "   ";
+let spaces = spaces.len();  // OK（新しい変数）
+```
+
+関連用語: immutable, mutable, shadowing, compile-time constant
+再発防止メモ: 基本は `let`、変更するなら `mut`、設定値なら `const`
+
+---
+
+### 質問: .map_err() と ? 演算子の仕組み
+
+日付: 2025-10-05
+カテゴリ: [Rust]
+Q: `.map_err()` と `?` 演算子はどう動く？エラー処理の流れは？
+A: `Result<T, E>` の `E`（エラー型）を別の型に変換するのが `.map_err()`。`?` は `Err` なら即座に return する糖衣構文。`io::Error` を `String` に変換して統一したエラー型にするために使う。
+コード例:
+
+```rust
+// .map_err() でエラー型変換
+let content = fs::read_to_string(path)
+    .map_err(|e| format!("読み込みエラー: {}", e))?;
+//           ^^^ io::Error → String に変換
+//                                                  ^ Err なら return
+
+// ? の展開イメージ
+match fs::read_to_string(path) {
+    Ok(content) => content,
+    Err(e) => return Err(format!("エラー: {}", e)),
+}
+```
+
+関連用語: Result, error propagation, early return, type conversion
+再発防止メモ: `?` は `Result` を返す関数でのみ使える。複数の `?` を連鎖できる
+
+---
+
+### 質問: .collect() の役割
+
+日付: 2025-10-05
+カテゴリ: [Rust]
+Q: `.collect()` は何をしている？
+A: イテレータの要素を集めて `Vec`, `HashSet`, `String` などのコレクションに変換する。`.map()` は遅延評価（lazy）なので、`.collect()` で初めて実際に処理が実行される。型推論が賢く、戻り値の型から自動判断。
+コード例:
+
+```rust
+let numbers = vec![1, 2, 3];
+let doubled: Vec<i32> = numbers
+    .iter()                    // イテレータに変換
+    .map(|n| n * 2)           // 各要素を変換（まだ実行されない）
+    .collect();                // Vec に集める（ここで実行）
+// doubled = [2, 4, 6]
+```
+
+関連用語: iterator, lazy evaluation, type inference, functional programming
+再発防止メモ: `.map()` だけでは実行されない、`.collect()` で初めて動く
+
+---
+
+### 質問: format! と &format!() の違い
+
+日付: 2025-10-05
+カテゴリ: [Rust]
+Q: `format!()` と `&format!()` の使い分けは？
+A: `format!()` は `String` を返す。`&format!()` は `&String` への参照だが、寿命が短い（式の終わりで消える）ので危険。`push_str()` など `&str` を受け取る関数には `&format!(...)` が使えるが、基本は `String` を返す方が安全。
+コード例:
+
+```rust
+// String を返す
+let message = format!("Hello, {}!", name);
+
+// &str を受け取る関数に渡す
+output.push_str(&format!("[id:{}] {}\n", id, content));
+//               ^ 一時的な参照（この行だけ有効）
+
+// これはエラー（参照の寿命が短い）
+let temp = &format!("test");  // 危険！
+```
+
+関連用語: String, &str, lifetime, temporary value
+再発防止メモ: 基本は `format!()` で `String` を返す、`&` は必要な時だけ
+
+---
+
+### 質問: todo!() マクロの使い方
+
+日付: 2025-10-05
+カテゴリ: [Rust]
+Q: 関数の最後にある `todo!()` は何？
+A: 「まだ実装していない」をマークするマクロ。コンパイルは通る（型チェックは OK）が、実行するとパニック。関数の雛形を作る時に便利。実装完了後は `Ok(())` などに置き換える。
+コード例:
+
+```rust
+fn handle_add(args: &[String]) -> Result<(), String> {
+    // ... 色々処理 ...
+    todo!()  // ← 実装中のマーカー
+}
+
+// 実装完了後
+fn handle_add(args: &[String]) -> Result<(), String> {
+    // ... 処理完了 ...
+    Ok(())  // ← todo!() を削除して正しい戻り値
+}
+```
+
+関連用語: unimplemented!, unreachable!, panic!
+再発防止メモ: `todo!()` は開発中のマーカー、実装したら削除
+
+---
